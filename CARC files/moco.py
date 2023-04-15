@@ -31,7 +31,7 @@ parser.add_argument('--epochs', default=200, type=int, metavar='N', help='number
 parser.add_argument('--schedule', default=[120, 160], nargs='*', type=int, help='learning rate schedule (when to drop lr by 10x); does not take effect if --cos is on')
 parser.add_argument('--cos', action='store_true', help='use cosine lr schedule')
 
-parser.add_argument('--batch-size', default=32, type=int, metavar='N', help='mini-batch size')
+parser.add_argument('--batch-size', default=64, type=int, metavar='N', help='mini-batch size')
 parser.add_argument('--wd', default=5e-4, type=float, metavar='W', help='weight decay')
 
 # moco specific configs:
@@ -58,7 +58,7 @@ args = parser.parse_args()  # running in command line
 args = parser.parse_args('')  # running in ipynb
 
 # set command line arguments here when running in ipynb
-args.epochs = 30
+args.epochs = 200
 args.cos = True
 args.schedule = []  # cos in use
 args.symmetric = False
@@ -341,6 +341,7 @@ def train(net, data_loader, train_optimizer, epoch, args):
 
 # lr scheduler for training
 def adjust_learning_rate(optimizer, epoch, args):
+    
     """Decay the learning rate based on schedule"""
     lr = args.lr
     if args.cos:  # cosine lr schedule
@@ -407,14 +408,14 @@ optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, weight_decay=args.wd
 
 # load model if resume
 epoch_start = 1
-if args.resume is not '':
-    checkpoint = torch.load(args.resume)
+if True:
+    checkpoint = torch.load('/home1/rshashan/cache-2023-04-03-11-48-52-moco/model_last.pth')
     model.load_state_dict(checkpoint['state_dict'])
     optimizer.load_state_dict(checkpoint['optimizer'])
     epoch_start = checkpoint['epoch'] + 1
-    print('Loaded from: {}'.format(args.resume))
+    print('Resuming from: {}'.format(epoch_start))
 
-model.load_state_dict(torch.load('/home1/rshashan/cache-2023-03-30-15-59-10-moco/model_last.pth')['state_dict'])
+#model.load_state_dict(torch.load('/home1/rshashan/cache-2023-03-31-08-14-23-moco/model_last.pth')['state_dict'])
 
 # logging
 results = {'train_loss': [], 'test_acc@1': []}
@@ -436,6 +437,8 @@ for epoch in range(epoch_start, args.epochs + 1):
     # save model
     torch.save({'epoch': epoch, 'state_dict': model.state_dict(), 'optimizer' : optimizer.state_dict(),}, args.results_dir + '/model_last.pth')
 
+model.load_state_dict(torch.load('/home1/rshashan/cache-2023-04-01-21-26-17-moco/model_last.pth')['state_dict'])
+print(torch.load('/home1/rshashan/cache-2023-04-01-21-26-17-moco/model_last.pth')['epoch'])
 num_classes = 10
 class CopyPasteDataset(Dataset):
 
@@ -480,26 +483,33 @@ class ProjectionHead(nn.Module):
     def __init__(self, input_size, num_classes):
         super(ProjectionHead, self).__init__()
 
-        self.linear1 = nn.Linear(input_size, 16)
-        self.linear2 = nn.Linear(16, num_classes)
+        self.linear1 = nn.Linear(input_size, 64)
+        self.linear2 = nn.Linear(64, num_classes)
+        #self.linear3 = nn.Linear(64, num_classes)
         self.relu = nn.ReLU()
+        #self.dropout = nn.Dropout(0.2)
 
     def forward(self, x):
         output = self.linear1(x)
         output = self.relu(output)
+        #output = self.dropout(output)
         output = self.linear2(output)
+        #output = self.relu(output)
+        #output = self.linear3(output)
         return output
 phead = ProjectionHead(128, num_classes)
 transform = transforms.Compose([             
     transforms.ToTensor()])
 copypaste_train = CopyPasteDataset(root_dir='/home1/rshashan/custom_dataset', transform=transform)
-cp_trainloader = DataLoader(copypaste_train, batch_size=16, shuffle=True)
+cp_trainloader = DataLoader(copypaste_train, batch_size=128, shuffle=True)
 '''
 Training projection head
 '''
-num_epochs = 50
+num_epochs = 300
 criterion = nn.CrossEntropyLoss()
-optimizer = torch.optim.SGD(phead.parameters(), lr = 0.001)
+#phead.load_state_dict(torch.load('/home1/rshashan/phead-new.pth'))
+optimizer = torch.optim.SGD(phead.parameters(), lr = 0.01)
+sch = torch.optim.lr_scheduler.StepLR(optimizer, gamma=0.1, step_size=100)
 model.eval()
 phead.train()
 phead.cuda()
@@ -519,7 +529,7 @@ for ep in range(num_epochs):
         total_loss += loss
         loss.backward()
         optimizer.step()
+        sch.step()
     total_loss /= len(cp_trainloader)
-    print('Epoch: ' + str(ep) + ' Loss: ' + str(total_loss))
-
-torch.save(phead.state_dict(), '/home1/rshashan/phead.pth')
+    print('Epoch: ' + str(ep) + ' Loss: ' + str(total_loss.item()) )
+    torch.save(phead.state_dict(), '/home1/rshashan/phead-new.pth')
